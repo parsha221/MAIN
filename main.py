@@ -1,72 +1,72 @@
 from typing import List, Dict, Any
 from typing_extensions import TypedDict
 from langgraph.graph import StateGraph, START, END
-from langgraph.graph.message import add_messages
 from servicenow import get_incident
 
-class InitializeState(TypedDict):
+# Define the State Types
+class InputState(TypedDict):
     alarm_list: List[Dict[str, Any]]
 
-class ProcessState(TypedDict):
-    incident_ids: List[str]
-
-class State(TypedDict):
+class OverallState(TypedDict):
+    alarm_list: List[Dict[str, Any]]
     incident_ids: List[str]
     incident_details: List[Dict[str, Any]]
 
-class PrivateState(TypedDict):
-    inc_det: List[Dict[str, Any]]
+class OutputState(TypedDict):
+    incident_details: List[Dict[str, Any]]
 
-def initialize_state(alarm_list: List[Dict[str, Any]]) -> InitializeState:
-    alarm_list1 = [
-        {"alarm_id": 1, "device_id": "Device_1", "alarm_type": "Critical", "description": "CPU usage above threshold", "severity": "High", "incident_id": "INC0000004"},
-        {"alarm_id": 2, "device_id": "Device_2", "alarm_type": "Warning", "description": "Memory usage above threshold", "severity": "Medium"},
-        {"alarm_id": 3, "device_id": "Device_3", "alarm_type": "Info", "description": "Disk space below threshold", "severity": "Low"},
-        {"alarm_id": 4, "device_id": "Device_4", "alarm_type": "Critical", "description": "Network failure", "severity": "High", "incident_id": "INC0000004"},
-    ]
-    return {"alarm_list": alarm_list1}
-
-def process_state(state: InitializeState) -> ProcessState:
+# Function to Initialize State
+def initialize_state(state: InputState) -> OverallState:
     alarm_list = state["alarm_list"]
     incident_ids = [alarm["incident_id"] for alarm in alarm_list if "incident_id" in alarm]
-    return {"incident_ids": incident_ids}
+    return OverallState(alarm_list=alarm_list, incident_ids=incident_ids, incident_details=[])
 
-def fetch_incidents_node(state: ProcessState) -> PrivateState:
+# Function to Fetch Incident Details
+def fetch_incidents_node(state: OverallState) -> OverallState:
     incident_ids = state.get("incident_ids", [])
+   
+    # Fetch incident details using the incident_ids
     incident_details = get_incident(incident_ids)
-    
+   
+    # Format the Incident Details
     formatted_incident_details = []
     for incident in incident_details:
         formatted_incident_details.append({
             "role": "system",
             "content": incident.get("close_notes", "No resolution provided")
         })
-    
-    inc_det = {"inc_det": formatted_incident_details}
-    return inc_det
+   
+    # Ensure that we return the state with both incident_ids and incident_details
+    state["incident_details"] = formatted_incident_details
+    return state
 
-# Defining Graph
-graph_builder = StateGraph(State)
+# Function to Output State
+def output_state(state: OverallState) -> OutputState:
+    return OutputState(incident_details=state["incident_details"])
+
+# Define the State Graph
+graph_builder = StateGraph(OverallState, input=InputState, output=OutputState)
 graph_builder.add_node("initialize_state", initialize_state)
-graph_builder.add_node("process_state", process_state)
 graph_builder.add_node("fetch_incidents", fetch_incidents_node)
+graph_builder.add_node("output_state", output_state)
 
+# Define the edges for the state graph
 graph_builder.add_edge(START, "initialize_state")
-graph_builder.add_edge("initialize_state", "process_state")
-graph_builder.add_edge("process_state", "fetch_incidents")
-graph_builder.add_edge("fetch_incidents", END)
+graph_builder.add_edge("initialize_state", "fetch_incidents")
+graph_builder.add_edge("fetch_incidents", "output_state")
+graph_builder.add_edge("output_state", END)
 
-# Compiling the graph
+# Compile the graph
 graph = graph_builder.compile()
 
-# Function to run the graph and print the output in the terminal
-def run_graph():
-    initial_state = initialize_state([])
-    process_state_result = process_state(initial_state)
-    final_state = fetch_incidents_node(process_state_result)
-    return final_state["inc_det"]
+# Example usage of the state graph
+alarm_list1 = [
+    {"alarm_id": 1, "device_id": "Device_1", "alarm_type": "Critical", "description": "CPU usage above threshold", "severity": "High", "incident_id": "INC0000004"},
+    {"alarm_id": 2, "device_id": "Device_2", "alarm_type": "Warning", "description": "Memory usage above threshold", "severity": "Medium"},
+    {"alarm_id": 3, "device_id": "Device_3", "alarm_type": "Info", "description": "Disk space below threshold", "severity": "Low"},
+    {"alarm_id": 4, "device_id": "Device_4", "alarm_type": "Critical", "description": "Network failure", "severity": "High"},
+]
 
-# Running the graph and printing the output
-if __name__ == "__main__":
-    incident_details = run_graph()
-    print(incident_details)
+# Execute the Graph
+answer = graph.invoke({"alarm_list": alarm_list1})
+print(answer)
